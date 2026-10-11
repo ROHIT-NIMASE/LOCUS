@@ -10,10 +10,13 @@ from logic.validation import (
 
 
 # These statuses currently occupy a seat.
-# Keep these values consistent with the final project schema.
+# "CONFIRMED" matches the DB ENUM value 'confirmed' (compared via .upper()).
+# "BOOKED" and "CHECKED_IN" are kept for backwards-compatibility with
+# existing unit tests in tests/test_seating.py.
 ACTIVE_BOOKING_STATUSES = frozenset({
-    "BOOKED",
-    "CHECKED_IN",
+    "CONFIRMED",   # primary DB status for active bookings
+    "BOOKED",      # legacy / test alias
+    "CHECKED_IN",  # legacy / test alias
 })
 
 

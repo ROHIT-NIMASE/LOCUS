@@ -11,13 +11,14 @@ from logic.validation import (
     validate_password,
     validate_user_id,
 )
+from services.responses import ok, fail
 
 
 # ── Internal helper ──────────────────────────────────────────────────────────
 
 def _row_to_user(row, include_password=False):
     """Convert a DB dict-row to a User model instance."""
-    user = User(
+    return User(
         user_id    = row["user_id"],
         name       = row["name"],
         email      = row["email"],
@@ -25,33 +26,57 @@ def _row_to_user(row, include_password=False):
         password   = row.get("password") if include_password else None,
         created_at = row.get("created_at"),
     )
-    return user
+
+
+def _row_to_safe_user_dict(row):
+    """Convert a DB dict-row to the user dictionary expected by the frontend."""
+    return {
+        "user_id":    row["user_id"],
+        "name":       row["name"],
+        "full_name":  row["name"],
+        "student_id": row["student_id"],
+        "username":   row["student_id"].lower(),
+        "email":      row["email"],
+        "created_at": str(row["created_at"]) if row.get("created_at") else None,
+    }
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
 
-def register_user(name, email, student_id, password):
+def register_user(name, arg2, arg3, password):
     """Create a new user account.
 
-    Args:
-        name        (str): Full name.
-        email       (str): Unique email address.
-        student_id  (str): Unique student/registration number.
-        password    (str): Plain-text password (will be hashed).
+    Supports both parameter orderings:
+      - (full_name, student_id, email, password) from UI
+      - (name, email, student_id, password) from backend test suite
 
     Returns:
-        dict – ``{"success": True,  "user_id": <id>}``
-             – ``{"success": False, "error": "<reason>"}``
+        dict – unified response with success, message, data, and user_id.
     """
+    # Detect parameter order by checking for '@'
+    if "@" in str(arg2):
+        email = str(arg2).strip().lower()
+        student_id = str(arg3).strip()
+    elif "@" in str(arg3):
+        student_id = str(arg2).strip()
+        email = str(arg3).strip().lower()
+    else:
+        student_id = str(arg2).strip()
+        email = str(arg3).strip().lower()
+
+    full_name = str(name).strip()
+
     try:
-        validate_name(name)
+        validate_name(full_name)
         validate_email(email)
         validate_student_id(student_id)
         validate_password(password)
     except ValueError as exc:
-        return {"success": False, "error": str(exc)}
+        err_msg = str(exc)
+        res = fail(err_msg)
+        res["error"] = err_msg
+        return res
 
-    # Hash the password
     hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
     conn = None
@@ -63,20 +88,29 @@ def register_user(name, email, student_id, password):
         cursor.execute(
             "INSERT INTO users (name, email, student_id, password) "
             "VALUES (%s, %s, %s, %s)",
-            (name.strip(), email.strip().lower(), student_id.strip(), hashed),
+            (full_name, email, student_id, hashed),
         )
         conn.commit()
-        return {"success": True, "user_id": cursor.lastrowid}
+        user_id = cursor.lastrowid
+
+        res = ok("Account created successfully.", {"user_id": user_id})
+        res["user_id"] = user_id
+        return res
 
     except Exception as exc:
         if conn:
             conn.rollback()
         err = str(exc)
-        if "uq_users_email" in err or "Duplicate entry" in err and "email" in err:
-            return {"success": False, "error": "Email address is already registered."}
-        if "uq_users_student_id" in err or "Duplicate entry" in err and "student_id" in err:
-            return {"success": False, "error": "Student ID is already registered."}
-        return {"success": False, "error": err}
+        if "uq_users_email" in err or ("Duplicate entry" in err and "email" in err):
+            err_msg = "An account with this email already exists."
+        elif "uq_users_student_id" in err or ("Duplicate entry" in err and "student_id" in err):
+            err_msg = "An account with this Student ID already exists."
+        else:
+            err_msg = err
+
+        res = fail(err_msg)
+        res["error"] = err_msg
+        return res
     finally:
         if cursor:
             cursor.close()
@@ -84,18 +118,26 @@ def register_user(name, email, student_id, password):
             conn.close()
 
 
-def login_user(email, password):
-    """Verify credentials and return the User on success.
+def login_user(identifier, password):
+    """Verify credentials and return user details on success.
+
+    Identifier can be an email OR a student ID / username.
 
     Returns:
-        dict – ``{"success": True,  "user": User}``
-             – ``{"success": False, "error": "<reason>"}``
+        dict – unified response with success, message, data (safe dict), and user (User model).
     """
+    ident = str(identifier).strip()
+    if not ident:
+        res = fail("Please enter both your email/username and password.")
+        res["error"] = "Invalid email or password."
+        return res
+
     try:
-        validate_email(email)
         validate_password(password)
     except ValueError as exc:
-        return {"success": False, "error": str(exc)}
+        res = fail(str(exc))
+        res["error"] = str(exc)
+        return res
 
     conn = None
     cursor = None
@@ -106,22 +148,33 @@ def login_user(email, password):
         cursor.execute(
             "SELECT user_id, name, email, student_id, password, created_at "
             "FROM   users "
-            "WHERE  email = %s",
-            (email.strip().lower(),),
+            "WHERE  LOWER(email) = %s OR LOWER(student_id) = %s",
+            (ident.lower(), ident.lower()),
         )
         row = cursor.fetchone()
 
         if not row:
-            return {"success": False, "error": "Invalid email or password."}
+            res = fail("Invalid email/username or password.")
+            res["error"] = "Invalid email or password."
+            return res
 
         if not bcrypt.checkpw(password.encode("utf-8"), row["password"].encode("utf-8")):
-            return {"success": False, "error": "Invalid email or password."}
+            res = fail("Invalid email/username or password.")
+            res["error"] = "Invalid email or password."
+            return res
 
         user = _row_to_user(row, include_password=False)
-        return {"success": True, "user": user}
+        safe_user = _row_to_safe_user_dict(row)
+
+        res = ok("Login successful.", safe_user)
+        res["user"] = user
+        return res
 
     except Exception as exc:
-        return {"success": False, "error": str(exc)}
+        err_msg = str(exc)
+        res = fail(err_msg)
+        res["error"] = err_msg
+        return res
     finally:
         if cursor:
             cursor.close()
@@ -138,7 +191,7 @@ def get_user_by_email(email):
         cursor = conn.cursor(dictionary=True)
         cursor.execute(
             "SELECT user_id, name, email, student_id, created_at "
-            "FROM   users WHERE email = %s",
+            "FROM   users WHERE LOWER(email) = %s",
             (email.strip().lower(),),
         )
         row = cursor.fetchone()
@@ -181,19 +234,17 @@ def get_user_by_id(user_id):
 
 
 def update_user(user_id, name, email, student_id):
-    """Update profile fields for a user.
-
-    Returns:
-        dict – ``{"success": True}``
-             – ``{"success": False, "error": "<reason>"}``
-    """
+    """Update profile fields for a user."""
     try:
         validate_user_id(user_id)
         validate_name(name)
         validate_email(email)
         validate_student_id(student_id)
     except ValueError as exc:
-        return {"success": False, "error": str(exc)}
+        err_msg = str(exc)
+        res = fail(err_msg)
+        res["error"] = err_msg
+        return res
 
     conn = None
     cursor = None
@@ -206,19 +257,26 @@ def update_user(user_id, name, email, student_id):
             (name.strip(), email.strip().lower(), student_id.strip(), user_id),
         )
         if cursor.rowcount == 0:
-            return {"success": False, "error": "User not found."}
+            res = fail("User not found.")
+            res["error"] = "User not found."
+            return res
         conn.commit()
-        return {"success": True}
+        res = ok("User updated successfully.")
+        return res
 
     except Exception as exc:
         if conn:
             conn.rollback()
         err = str(exc)
-        if "uq_users_email" in err or "Duplicate entry" in err and "email" in err:
-            return {"success": False, "error": "Email address is already in use."}
-        if "uq_users_student_id" in err or "Duplicate entry" in err and "student_id" in err:
-            return {"success": False, "error": "Student ID is already in use."}
-        return {"success": False, "error": err}
+        if "uq_users_email" in err or ("Duplicate entry" in err and "email" in err):
+            err_msg = "Email address is already in use."
+        elif "uq_users_student_id" in err or ("Duplicate entry" in err and "student_id" in err):
+            err_msg = "Student ID is already in use."
+        else:
+            err_msg = err
+        res = fail(err_msg)
+        res["error"] = err_msg
+        return res
     finally:
         if cursor:
             cursor.close()
@@ -227,16 +285,14 @@ def update_user(user_id, name, email, student_id):
 
 
 def delete_user(user_id):
-    """Delete a user account.
-
-    Returns:
-        dict – ``{"success": True}``
-             – ``{"success": False, "error": "<reason>"}``
-    """
+    """Delete a user account."""
     try:
         validate_user_id(user_id)
     except ValueError as exc:
-        return {"success": False, "error": str(exc)}
+        err_msg = str(exc)
+        res = fail(err_msg)
+        res["error"] = err_msg
+        return res
 
     conn = None
     cursor = None
@@ -245,14 +301,19 @@ def delete_user(user_id):
         cursor = conn.cursor()
         cursor.execute("DELETE FROM users WHERE user_id = %s", (user_id,))
         if cursor.rowcount == 0:
-            return {"success": False, "error": "User not found."}
+            res = fail("User not found.")
+            res["error"] = "User not found."
+            return res
         conn.commit()
-        return {"success": True}
+        return ok("User deleted successfully.")
 
     except Exception as exc:
         if conn:
             conn.rollback()
-        return {"success": False, "error": str(exc)}
+        err_msg = str(exc)
+        res = fail(err_msg)
+        res["error"] = err_msg
+        return res
     finally:
         if cursor:
             cursor.close()

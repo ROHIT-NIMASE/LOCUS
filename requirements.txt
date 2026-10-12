@@ -1,1 +1,3 @@
 customtkinter
+bcrypt
+mysql-connector-python

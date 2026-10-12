@@ -9,7 +9,7 @@ Demo login (mock data): `student` / `locus123`
     main.py                    one window; show_screen("name") switches screens
     theme.py                   colours + fonts (change the look here only)
     ui/                        one file per screen
-    components/                reusable pieces (buttons, seat card, booking card, messages, header)
+    components/                reusable pieces (buttons, seat card, booking card, messages, headAer)
     services/backend.py        the single door the UI uses (just re-exports, no logic)
     services/user_service.py   register_user, login_user
     services/seat_service.py   get_seat_statuses, get_available_seat_count

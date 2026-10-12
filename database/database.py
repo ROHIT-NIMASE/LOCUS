@@ -1,32 +1,28 @@
+
 """MySQL connection factory for LOCUS."""
 
+import os
 import mysql.connector
-from mysql.connector import Error
+from dotenv import load_dotenv
 
+load_dotenv()
 
-# ── Local development credentials ──────────────────────────────────────────
-# Change these to match your MySQL installation.
 DB_CONFIG = {
-    "host":     "localhost",
-    "port":     3306,
-    "user":     "root",            # your MySQL username
-    "password": "Juilakal123",    # your MySQL password
-    "database": "library_hotdesking",
-    "charset":  "utf8mb4",
-    "autocommit": False,      # we manage transactions ourselves
+    "host": os.getenv("DB_HOST", "localhost"),
+    "port": int(os.getenv("DB_PORT", "3306")),
+    "user": os.getenv("DB_USER", "root"),
+    "password": os.getenv("DB_PASSWORD"),
+    "database": os.getenv("DB_NAME", "library_hotdesking"),
+    "charset": "utf8mb4",
+    "autocommit": False,
 }
-# ───────────────────────────────────────────────────────────────────────────
 
 
 def get_connection():
-    """
-    Return a new mysql.connector connection.
+    """Return a new MySQL database connection."""
+    if not DB_CONFIG["password"]:
+        raise ValueError(
+            "DB_PASSWORD is missing. Check your .env file."
+        )
 
-    Raises:
-        mysql.connector.Error – if the connection cannot be established.
-    """
-    try:
-        conn = mysql.connector.connect(**DB_CONFIG)
-        return conn
-    except Error as exc:
-        raise exc
+    return mysql.connector.connect(**DB_CONFIG)
